@@ -260,6 +260,10 @@ class HandPoseNode(Node):
         # 손 모양 (깊이 불필요)
         out.grip_closure = hg.grip_closure(world)
         out.gesture = hg.classify_gesture(world)
+        # 손목 각도: 먼저 손 모양 3D(world — 축이 돌린 영상과 같은 방향, 위 = −y)로. 깊이·tf 로 위치를 구하면 아래에서
+        # 그 좌표 기준으로 다시 계산. 깊이가 없을 때 기본값 0(= 손바닥 아래)이 나가던 버그 수정
+        _, R_w = hg.palm_frame(world, out.handedness)
+        out.wrist_angle_deg = hg.wrist_rotation_deg(R_w, np.array([0.0, -1.0, 0.0]))
 
         # 위치 (깊이 필요)
         u, v = unrotate_norm(np.array([p.x for p in norm]), np.array([p.y for p in norm]), self.rot)
