@@ -16,6 +16,7 @@
 import math
 import os
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -29,12 +30,14 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool
 from tf2_ros import Buffer, TransformListener
 
+from rcl_interfaces.msg import SetParametersResult
 from rally_interfaces.msg import HandState
 from rally_human import hand_geometry as hg
 from rally_human.gesture import GestureFilter
@@ -94,7 +97,8 @@ class HandPoseNode(Node):
         self.declare_parameter("image_rotation_deg", 0)          # 세로 장착이면 270 시험 가능 (10/7 bag 에선 차이 없음)
         self.declare_parameter("rate_hz", 30.0)
         self.declare_parameter("gesture_frames", 5)               # 30 Hz 기준 약 0.17 s
-        self.declare_parameter("fist_estop_enabled", True)
+        self.declare_parameter("fist_estop_enabled", True)       # 실행 중에도 바뀜 (모드 5 건네기 구간에서 끄기)
+        self.declare_parameter("fist_estop_off_max_s", 30.0)     # 꺼 둔 채 이 시간이 지나면 자동으로 다시 켬 (0 = 안 켬)
         self.declare_parameter("centerline_x_m", float("nan"))    # NaN 이면 rally_bringup/config/table.yaml
         self.declare_parameter("min_detection_confidence", 0.5)
 
@@ -105,6 +109,8 @@ class HandPoseNode(Node):
         self.centerline_x = self._load_centerline()
         self.gestures = GestureFilter(int(self.get_parameter("gesture_frames").value),
                                       bool(self.get_parameter("fist_estop_enabled").value))
+        self.fist_off_since: float | None = None if self.gestures.fist_enabled else time.monotonic()
+        self.add_on_set_parameters_callback(self._on_params)
         self.landmarker = self._make_landmarker()
 
         self.bridge = CvBridge()
@@ -133,6 +139,28 @@ class HandPoseNode(Node):
         self.create_timer(1.0 / float(p("rate_hz").value), self._tick, callback_group=work_group)
         self.get_logger().info(f"손 인식 시작: 회전 {self.rot}°, 중앙선 x={self.centerline_x:.3f} m, "
                                f"주먹 정지 {'켬' if self.gestures.fist_enabled else '끔'}")
+
+    def _on_params(self, params: list[Parameter]) -> SetParametersResult:
+        """fist_estop_enabled 만 실행 중에 반영. 예: ros2 param set /rally_hand_pose fist_estop_enabled false"""
+        for prm in params:
+            if prm.name == "fist_estop_enabled":
+                on = bool(prm.value)
+                if on != self.gestures.fist_enabled:
+                    self.gestures.fist_enabled = on
+                    self.fist_off_since = None if on else time.monotonic()
+                    if on:
+                        self.get_logger().info("주먹 정지 켬")
+                    else:
+                        self.get_logger().warn(f"주먹 정지 끔 (최대 {self.get_parameter('fist_estop_off_max_s').value:.0f} s"
+                                               " 뒤 자동으로 다시 켬)")
+        return SetParametersResult(successful=True)
+
+    def _check_fist_off_timeout(self) -> None:
+        """끈 채로 잊혀도 주먹 정지가 영영 꺼져 있지 않게."""
+        limit = float(self.get_parameter("fist_estop_off_max_s").value)
+        if self.fist_off_since is not None and limit > 0 and time.monotonic() - self.fist_off_since > limit:
+            self.get_logger().warn(f"주먹 정지가 {limit:.0f} s 넘게 꺼져 있어 다시 켬")
+            self.set_parameters([Parameter("fist_estop_enabled", value=True)])
 
     # ----- 준비 -----
     def _make_landmarker(self):
@@ -185,6 +213,7 @@ class HandPoseNode(Node):
 
     # ----- 처리 -----
     def _tick(self) -> None:
+        self._check_fist_off_timeout()
         with self.lock:
             cmsg = self.latest_color
             self.latest_color = None

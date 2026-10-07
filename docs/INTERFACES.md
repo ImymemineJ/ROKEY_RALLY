@@ -48,6 +48,8 @@ webcam_link          측면 웹캠 (table_link 기준 static)
 
 **HandState 거리 NaN** (#44): `detected=true` 인데 손 위치를 못 구하면(정렬 깊이 없음·컬러와 시각이 맞는 깊이 없음·`base_link` tf 없음) `distance_to_centerline = NaN` = "손은 보이는데 거리 모름". 가짜 거리를 만들지 않는다. safety_monitor 는 `detected && NaN` 이면 SLOW. tf 가 없을 때는 `header.frame_id` 가 카메라 프레임.
 
+**주먹 정지 끄기** (모드 5 건네기 구간): 물체를 쥔 손이 주먹으로 보일 수 있어 `rally_hand_pose` 노드 파라미터 `fist_estop_enabled` 를 실행 중에 바꿀 수 있다 (`ros2 param set /rally_hand_pose fist_estop_enabled false`, 코드에선 SetParameters 서비스). 꺼 둔 채 `fist_estop_off_max_s`(기본 30 s)가 지나면 자동으로 다시 켠다. 켤 때 손이 아직 주먹이면 바로 정지 요청이 나가므로 **손을 놓은 뒤에 켠다**. 끄는 동안에도 음성 비상어·힘 한계·손 거리는 그대로 동작. 언제 끌지는 정정인·정동휘 결정 대기.
+
 **TTS 발화 중 마이크** (#45): `/rally/voice/speaking` 은 `Speak.block_mic=true` 발화가 시작되면 `true`, 끝나고 잔향 여유(약 0.3 s) 뒤 `false`. intent_node 는 `true` 동안 **일반 명령만 무시**하고 비상 키워드("그만/멈춰" → `is_emergency`)는 계속 듣는다 — 로봇이 말하는 동안에도 음성 정지가 살아 있어야 한다. 그래서 TTS 문구에는 "그만"·"멈춰"를 쓰지 않는다 (에코로 정지 오인식 방지).
 
 **음성으로 훈련 고르기** (`VoiceIntent` 슬롯 약속, 메시지 변경 없음): "공 굴리기 하자"처럼 훈련 이름을 말하면 `intent: next_mode` + `slot_keys: [mode]`, `slot_values: ["1"]` (1 공 굴리기 · 3 캐치볼 · 5 건네고 받기 · 7 팔씨름). 세션 시작과 같이 말하면 `start_session` 에 같은 슬롯. 슬롯이 없으면 순서상 다음 모드. 모드 3 이 꺼져 있으면(`mode3_challenge.enabled: false`) brain 이 무시하고 TTS 로 안내.

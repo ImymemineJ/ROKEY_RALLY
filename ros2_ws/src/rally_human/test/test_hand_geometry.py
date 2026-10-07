@@ -150,3 +150,13 @@ def test_short_miss_keeps_stable_fist_without_refiring():
         f.update(True, hg.GESTURE_FIST)
     assert f.update(False, hg.GESTURE_NONE) == (hg.GESTURE_FIST, False)  # 잠깐 놓쳐도 주먹 유지, 재요청 없음
     assert f.update(True, hg.GESTURE_FIST) == (hg.GESTURE_FIST, False)
+
+
+def test_fist_toggle_at_runtime():
+    """건네기 중 끄기 → 주먹이어도 정지 없음 → 다시 켰을 때 아직 주먹이면 한 번 정지 (안전 쪽)."""
+    f = GestureFilter(frames=3)
+    f.fist_enabled = False
+    assert all(f.update(True, hg.GESTURE_FIST) == (hg.GESTURE_NONE, False) for _ in range(5))
+    f.fist_enabled = True
+    assert f.update(True, hg.GESTURE_FIST) == (hg.GESTURE_FIST, True)
+    assert f.update(True, hg.GESTURE_FIST) == (hg.GESTURE_FIST, False)      # 한 번만
