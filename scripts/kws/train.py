@@ -101,6 +101,7 @@ def main() -> None:
     ap.add_argument("--threshold", type=float, default=0.7)
     ap.add_argument("--aug", type=int, default=15, help="키워드 녹음 하나당 만드는 변형 수")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--mine", type=int, default=3, help="오탐 구간 재학습 반복 수 (학습용 주변 소리만 씀, 0 = 끔)")
     a = ap.parse_args()
     rng = random.Random(a.seed)
     from openwakeword.utils import AudioFeatures
@@ -145,16 +146,34 @@ def main() -> None:
         for _ in range(max(3, a.aug // 3)):
             X.append(augment(x, noises, rng))
             y.append(0)
-    n_amb = len(X)                                       # 주변 소리 조각도 '아님' 으로 같은 수만큼
-    for _ in range(n_amb // 2):
+    n_amb = max(len(X) // 2, int(len(amb_tr) / RATE * 3))   # 주변 소리 조각 '아님': 1초당 3개 (길게 녹음할수록 더 씀)
+    for _ in range(n_amb):
         s = rng.randint(0, len(amb_tr) - CLIP)
         X.append(amb_tr[s:s + CLIP] * rng.uniform(0.5, 1.5))
         y.append(0)
     print(f"학습 예시 {len(X)}개 (키워드 {sum(1 for v in y if v)} · 아님 {sum(1 for v in y if not v)}) → 특징 추출 중")
-    Xe = embed(feat, X)
-    clf = make_pipeline(StandardScaler(), MLPClassifier(hidden_layer_sizes=(64,), alpha=1e-3, max_iter=300,
-                                                       early_stopping=True, random_state=a.seed))
-    clf.fit(Xe, np.array(y))
+    Xe, Y = embed(feat, X), np.array(y)
+
+    def fit(Xe: np.ndarray, Y: np.ndarray):
+        c = make_pipeline(StandardScaler(), MLPClassifier(hidden_layer_sizes=(64,), alpha=1e-3, max_iter=300,
+                                                          early_stopping=True, random_state=a.seed))
+        return c.fit(Xe, Y)
+    clf = fit(Xe, Y)
+
+    # 오탐 구간 재학습: 학습용 주변 소리(앞 70 %)를 흘려 키워드로 헷갈린 순간을 찾아 '아님' 으로 더 가르친다.
+    # 평가용(뒤 30 %)은 쓰지 않는다. wake word 학습에서 흔히 쓰는 방법 (hard negative mining)
+    for r in range(a.mine):
+        kw = 1.0 - stream_proba(feat, clf, amb_tr)[:, 0]
+        ends = [(i + 1) * 1280 for i in np.where(kw >= 0.5)[0] if (i + 1) * 1280 >= CLIP]
+        if len(ends) > 1500:
+            ends = rng.sample(ends, 1500)
+        print(f"  재학습 {r + 1}/{a.mine}: 학습용 주변 소리 {len(amb_tr) / RATE:.0f} s 에서 헷갈린 순간 {len(ends)}개 → '아님' 으로 추가")
+        if not ends:
+            break
+        hard = [amb_tr[e - CLIP:e] * rng.uniform(0.6, 1.4) for e in ends for _ in range(2)]
+        Xe = np.vstack([Xe, embed(feat, hard)])
+        Y = np.concatenate([Y, np.zeros(len(hard), dtype=Y.dtype)])
+        clf = fit(Xe, Y)
 
     # 1) 떼어 둔 녹음으로 인식률. 각 녹음이 비상·호출 어느 쪽으로 잡히는지 둘 다 센다
     print(f"\n[떼어 둔 녹음]  임계 {a.threshold}    비상 감지 / 호출 감지")
