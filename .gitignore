@@ -8,6 +8,8 @@ __pycache__/
 models/*.pt
 models/*.engine
 models/*.onnx
+models/**/*.task
+models/**/*.joblib
 data/datasets/
 data/bags/
 # 비밀
