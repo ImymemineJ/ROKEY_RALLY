@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""비상어 키워드("그만"·"멈춰") 학습용 녹음. 화면 안내에 맞춰 말하면 1.5 초씩 잘라 저장한다.
+"""비상어 키워드("그만"·"멈춰") + 호출어("랠리야") 학습용 녹음. 화면 안내에 맞춰 말하면 1.5 초씩 잘라 저장한다.
+호출어는 기획 FR-06 (커스텀 웨이크워드 "랠리야", 오탐 ≤ 1회/10분). 같은 판별기로 학습해 녹음을 한 번에 끝낸다.
 
 저장: data/datasets/kws/<라벨>/<사람>_<번호>.wav  (data/ 는 git 제외)
 사용:
-    python3 scripts/kws/record.py --who dh                 # 그만 30 · 멈춰 30 · 다른 말 40 · 주변 소리 3 분
+    python3 scripts/kws/record.py --who dh                 # 그만 30 · 멈춰 30 · 랠리야 30 · 다른 말 40 · 주변 소리 3 분
     python3 scripts/kws/record.py --who dh --only ambient  # 주변 소리만 (사무실 말소리·팬 소리 그대로 두기)
     python3 scripts/kws/record.py --who dh --only 그만 --n 10
 --who: 녹음한 사람 약칭 (사람마다 나눠 평가하려고)
@@ -25,7 +26,7 @@ OUT = Path(__file__).resolve().parents[2] / "data" / "datasets" / "kws"
 OTHER = ["그래", "그냥", "그림", "그만큼", "그런데", "만두", "멈추다", "머리", "훈련 시작", "다음 거 하자",
          "힘들어요", "천천히", "어렵게", "공 굴리기", "캐치볼", "팔씨름", "괜찮아요", "네", "아니요", "좋아요",
          "잠깐만", "다시 해요", "그만두고 싶다", "그림 그리자", "멀리", "마셔", "멋져", "검은색", "금방", "건너",
-         "안녕하세요", "고마워요", "잘했어요", "하나 둘 셋", "랠리야", "hello rokey", "물 좀 주세요", "어깨", "손목", "손"]
+         "안녕하세요", "고마워요", "잘했어요", "하나 둘 셋", "갤러리", "hello rokey", "물 좀 주세요", "어깨", "샐러리", "손"]
 
 
 def save(path: Path, audio: np.ndarray) -> None:
@@ -75,7 +76,7 @@ def ambient(who: str, mic, seconds: float) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--who", required=True)
-    ap.add_argument("--only", choices=["그만", "멈춰", "other", "ambient"], default=None)
+    ap.add_argument("--only", choices=["그만", "멈춰", "랠리야", "other", "ambient"], default=None)
     ap.add_argument("--n", type=int, default=30)
     ap.add_argument("--ambient-s", type=float, default=180)
     ap.add_argument("--mic", default=None, help="입력 장치 번호 (scripts/check_voice.py devices)")
@@ -86,6 +87,8 @@ def main() -> None:
             prompted("geuman", ["그만"] * a.n, a.who, mic)
         if a.only in (None, "멈춰"):
             prompted("meomchwo", ["멈춰"] * a.n, a.who, mic)
+        if a.only in (None, "랠리야"):
+            prompted("rally", ["랠리야"] * a.n, a.who, mic)
         if a.only in (None, "other"):
             prompted("other", OTHER, a.who, mic)
         if a.only in (None, "ambient"):
