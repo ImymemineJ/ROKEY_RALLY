@@ -11,7 +11,7 @@ TTS 발화 중(/rally/voice/speaking=true)에도 듣는다. 그동안 들은 말
 비상어 상시 감지 (#50, 기획 CP9·FR-07): 호출어 없이 마이크 80 ms 마다 키워드 모델(rally_voice/kws.py,
   models/kws/emergency_kws.joblib)을 돌려 "그만"·"멈춰"가 들리면 바로 /rally/safety/estop + VoiceIntent(stop, is_emergency).
   STT·네트워크를 안 거친다. 로봇 발화 중에도, 호출어 뒤 녹음 중에도, STT 기다리는 중에도 계속 듣는다
-  (그래서 STT·LLM 은 별도 스레드에서). 녹음 중에 비상어가 들리면 그 녹음은 버리고, STT 결과가 비상어여도
+  (그래서 STT·LLM 은 별도 스레드에서). 녹음 중에 키워드가 울려도 녹음·STT 는 그대로 하고, STT 결과가 비상어인데
   키워드로 이미 정지했으면 다시 발행하지 않는다. 모델 파일이 없으면 이 기능만 꺼지고 나머지는 그대로 (호출어 뒤 STT 비상어 규칙은 유지).
 음성 원본이 OpenAI 로 나간다 (선생님 방식). 로컬 STT(faster-whisper) 전환은 팀 결정 사항.
 """
@@ -168,13 +168,8 @@ class IntentNode(Node):
                 for _ in range(rec_frames):
                     frames.append(read().copy())
                     during_speech = during_speech or self._robot_speaking()
-                    if self._kws_last_hit >= rec_start:
-                        break
-                if self._kws_last_hit >= rec_start:
-                    # 녹음 중에 비상어로 이미 정지 요청 → 이 녹음은 STT 할 필요 없음 (같은 말로 정지가 두 번 나가지 않게)
-                    self.get_logger().info("녹음 중 비상어 감지 → 이번 녹음은 버림")
-                    model.reset()
-                    continue
+                # 녹음 중에 키워드가 울려도 녹음은 버리지 않는다 — 키워드 오탐("다음 거 하자" → 멈춰)이면 명령까지 잃으므로.
+                # 같은 비상어로 정지가 두 번 나가는 것만 _handle_audio 에서 막는다
                 # STT·LLM(1~6 s)은 다른 스레드에서 — 그동안에도 마이크를 계속 읽어 비상어·다음 호출어를 듣는다.
                 # 앞 말 처리 중에 들어온 호출어도 받아 따로 처리 (stamp 가 달라 brain 이 구분)
                 threading.Thread(target=self._handle_audio, args=(np.concatenate(frames), stamp, during_speech, rec_start),
