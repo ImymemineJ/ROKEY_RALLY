@@ -251,6 +251,7 @@ class IntentNode(Node):
 
     def destroy_node(self) -> None:
         self._stop.set()
+        self.thread.join(timeout=1.0)    # 마이크 스레드가 끝난 뒤 종료 (안 기다리면 "terminate called without an active exception")
         super().destroy_node()
 
 
