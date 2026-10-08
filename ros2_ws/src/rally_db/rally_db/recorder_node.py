@@ -2,7 +2,8 @@
 담당: 조정묵
 
 구독                               기록
-  /rally/brain/trial_result        → trials (다음 flush 에서, 최대 0.5 s 뒤)
+  /rally/brain/trial_result        → trials (다음 flush 에서, 최대 0.5 s 뒤, feature_vec 포함 — embeddings.py)
+                                     + Redis rally:events kind=trial (대시보드 알림)
   /rally/robot/wrench   100 Hz     → ts_wrench (0.5 s 마다 묶어서)
   /rally/perception/hand 30 Hz     → ts_hand   (손이 잡힌 프레임만, 0.5 s 마다 묶어서)
   /rally/safety/status             → events kind=safety_change (레벨·사유가 바뀔 때만) + Redis rally:events
@@ -33,7 +34,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from rally_db import convert
+from rally_db import convert, embeddings
 from rally_db.repository import Repository, StorageUnavailable
 from rally_interfaces.msg import HandState, SafetyStatus, SceneContext, TrialResult, VoiceIntent
 
@@ -60,6 +61,11 @@ class Recorder(Node):
         self._last_mode: int | None = None
         self._storage_ok = True
         self._written = dict.fromkeys(("시도", "사건", "힘", "손", "대화"), 0)   # 요약 로그용, io_group 에서만 만진다
+        try:
+            self._embed_spec: embeddings.Spec | None = embeddings.load_spec()
+        except (OSError, ValueError, KeyError) as e:
+            self._embed_spec = None   # 벡터 없이도 기록은 계속 (유사 시도 검색에서만 빠진다)
+            self.get_logger().error(f"embeddings.yaml 읽기 실패 — feature_vec 없이 기록: {e}")
 
         reliable = QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
         self.create_subscription(TrialResult, "/rally/brain/trial_result", self._on_trial, reliable)
@@ -148,8 +154,12 @@ class Recorder(Node):
                 sessions.pop(0)
             while trials:
                 msg = trials[0]
-                self.repo.add_trial(convert.trial_to_row(msg, convert.session_uuid(msg.session_id) or self._session_id))
+                row = convert.trial_to_row(msg, convert.session_uuid(msg.session_id) or self._session_id)
+                if self._embed_spec is not None:
+                    row["feature_vec"] = embeddings.trial_vector(row, self._embed_spec)
+                trial_id = self.repo.add_trial(row)
                 trials.pop(0)
+                self._notify("trial", convert.trial_to_event(row, trial_id))
             while events:
                 self.repo.add_event(*events[0])
                 events.pop(0)
@@ -173,6 +183,13 @@ class Recorder(Node):
             self._requeue(sessions, trials, events, dialog, wrench, hand, state)
         except Exception as e:   # 메시지 하나가 잘못돼도 노드는 산다 — 그 항목은 버린다
             self.get_logger().error(f"기록 실패, 해당 묶음 버림: {e!r}")
+
+    def _notify(self, kind: str, payload: dict) -> None:
+        """대시보드 알림만 (rally:events). 실패해도 다시 보내지 않는다 — DB 에 이미 썼으니 재시도하면 중복 기록이 된다."""
+        try:
+            self.repo.publish_event(kind, payload, session_id=payload.get("session_id"))
+        except StorageUnavailable:
+            pass
 
     def _log_summary(self) -> None:
         if not any(self._written.values()):
