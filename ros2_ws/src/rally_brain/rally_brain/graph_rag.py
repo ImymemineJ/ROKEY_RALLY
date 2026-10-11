@@ -8,10 +8,14 @@ Graph RAG (세션이 끝난 뒤 리포트 스레드에서만 — 세션·로봇 
   1. 검색: 이번 세션 시도마다 같은 모드·다른 세션의 가장 비슷한 시도 k 개 (trials.feature_vec, pgvector)
   2. 그래프: 그 시도들 —observed→ 보상 동작 —indicatesFatigue→ 피로 신호 를 따라감 (Repository.graph_trials)
   3. 요약: 모드별 집계 숫자만 (summarize). 시도·세션 ID·날짜·notes 원문은 LLM 에 보내지 않는다 (llm_payload).
+휴식 판단 (rest_advisor, PR ② — 실시간 경로라 DB 를 판단 시점에 부르지 않는다)
+  RestGraphCache: 시도가 끝날 때마다 백그라운드 스레드 하나가 같은 조회를 해 모드별 rest_summary 를 갈아 둔다.
+  휴식 판단은 get() 으로 이미 있는 값만 읽는다 (없거나 다른 세션 것이면 None → 그래프 없이 기존 입력만).
 보상 동작 → 피로 관계는 온톨로지에 '근거 약함'(기획서 4.10, 임상 근거 확인 전)으로 적혀 있어 그대로 표시한다.
 """
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -63,6 +67,7 @@ class GraphMode:
     similar: CompStat                                  # 비슷한 과거 시도 전체
     similar_comp: dict[str, CompStat] = field(default_factory=dict)   # 그중 그 보상 동작이 나온 시도
     similar_clean: CompStat = field(default_factory=CompStat)         # 그중 보상 동작이 없던 시도
+    similar_any: CompStat = field(default_factory=CompStat)           # 그중 보상 동작이 하나라도 있던 시도
     fatigue_linked: int = 0                            # 비슷한 시도 중 피로 신호로 이어지는 보상 동작이 있던 시도 수
 
 
@@ -84,9 +89,9 @@ def summarize(current: Sequence[dict[str, Any]], similar: Sequence[dict[str, Any
                        similar=CompStat(len(sim), sum(bool(r["success"]) for r in sim)))
         for r in sim:
             ok = int(bool(r["success"]))
-            if not r["observed"]:
-                gm.similar_clean.trials += 1
-                gm.similar_clean.successes += ok
+            group = gm.similar_any if r["observed"] else gm.similar_clean
+            group.trials += 1
+            group.successes += ok
             for c in r["observed"]:
                 st = gm.similar_comp.setdefault(_key(c), CompStat())
                 st.trials += 1
@@ -147,3 +152,86 @@ def fetch(repo, session_id: str, expected: int, k: int = 5, wait_s: float = 3.0,
         if len(current) >= expected or clock() >= deadline:
             return current, similar
         sleep(0.5)
+
+
+def rest_summary(gm: GraphMode, min_trials: int = 3) -> dict[str, float | int] | None:
+    """휴식 판단 LLM 입력 (rest_advisor.GRAPH_FIELDS). 비슷한 시도가 min_trials 미만이면 None,
+    비교 쪽 시도가 min_trials 미만인 비율은 뺀다 (적은 표본의 비율로 판단하지 않게).
+    모드 1 은 성공률을 보내지 않는다 — 손동작 받기 후보는 실제 공 잡기 성공의 증거가 아니다 (rest_advisor 와 같은 규칙)."""
+    if gm.similar.trials < min_trials:
+        return None
+    out: dict[str, float | int] = {"similar_trials": gm.similar.trials,
+                                   "fatigue_linked_share": round(gm.fatigue_linked / gm.similar.trials, 3)}
+    if gm.mode == 1:
+        return out
+    if gm.similar_any.trials >= min_trials:
+        out["with_compensation_rate"] = round(gm.similar_any.rate, 3)
+    if gm.similar_clean.trials >= min_trials:
+        out["without_compensation_rate"] = round(gm.similar_clean.rate, 3)
+    return out
+
+
+class RestGraphCache:
+    """휴식 판단용 그래프 근거를 백그라운드에서 갈아 두는 곳. refresh·get 은 막히지 않는다.
+    워커는 한 번에 하나 — 돌고 있으면 새 refresh 는 '한 번 더' 표시만 하고 끝난 뒤 이어서 돈다 (쌓이지 않음)."""
+
+    def __init__(self, repo_factory: Callable[[], Any], k: int = 3, min_trials: int = 3, delay_s: float = 1.0,
+                 log: Callable[[str], None] | None = None, sleep: Callable[[float], None] = time.sleep):
+        self._factory, self.k, self.min_trials, self.delay_s = repo_factory, k, min_trials, delay_s
+        self._log, self._sleep = log or (lambda _m: None), sleep
+        self._lock = threading.Lock()
+        self._data: tuple[str, dict[int, dict]] | None = None     # (session_uuid, 모드 → rest_summary)
+        self._worker: threading.Thread | None = None
+        self._again: str | None = None
+        self._repo = None
+        self._seeded = False
+        self._closed = False
+
+    def get(self, session_uuid: str | None, mode: int) -> dict | None:
+        with self._lock:
+            if self._data is None or session_uuid is None or self._data[0] != session_uuid:
+                return None
+            return self._data[1].get(mode)
+
+    def refresh(self, session_uuid: str | None) -> None:
+        if not session_uuid:
+            return
+        with self._lock:
+            if self._closed:
+                return
+            if self._worker is not None:      # 워커가 끝날 때 lock 안에서 None 으로 — 그 사이 요청을 놓치지 않는다
+                self._again = session_uuid
+                return
+            self._worker = threading.Thread(target=self._run, args=(session_uuid,), name="rest-graph", daemon=True)
+            self._worker.start()
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+
+    def _run(self, session_uuid: str) -> None:
+        while True:
+            self._sleep(self.delay_s)          # 방금 끝난 시도가 recorder flush(0.5 s) 로 DB 에 들어오도록
+            try:
+                result = self._query(session_uuid)
+            except Exception as e:  # noqa: BLE001 — DB 끊김·SQL 오류여도 휴식 판단은 그래프 없이 계속
+                self._log(f"[휴식 그래프] 조회 실패 ({type(e).__name__}) — 그래프 없이 판단")
+                self._repo, result = None, None
+            with self._lock:
+                if result is not None:
+                    self._data = (session_uuid, result)
+                session_uuid, self._again = self._again, None
+                if session_uuid is None or self._closed:
+                    self._worker = None
+                    return
+
+    def _query(self, session_uuid: str) -> dict[int, dict] | None:
+        if self._repo is None:
+            self._repo = self._factory()
+        if not self._repo.graph_ready():
+            return None
+        if not self._seeded:
+            self._repo.upsert_graph(*seed_rows())
+            self._seeded = True
+        rows = summarize(*self._repo.graph_trials(session_uuid, self.k))
+        return {gm.mode: summ for gm in rows if (summ := rest_summary(gm, self.min_trials)) is not None}

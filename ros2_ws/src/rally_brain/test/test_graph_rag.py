@@ -1,6 +1,8 @@
 """지식 그래프 + Graph RAG — 온톨로지 → 그래프 행, 집계, LLM 입력 익명성, 리포트 연결 (DB 없이 가짜 저장소)."""
 import json
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -147,3 +149,86 @@ def test_prompt_explains_graph():
     from rally_brain.llm_advisor import load_prompt
     text = load_prompt("prompts/session_report.md")
     assert "graph" in text and "trunk_lean" in text and "단정하지 않는다" in text
+
+
+# ---------- 휴식 판단용 (PR ②) ----------
+def test_rest_summary_thresholds_and_mode1():
+    rows = {g.mode: g for g in gr.summarize(CURRENT, SIMILAR)}
+    m1 = gr.rest_summary(rows[1])
+    assert m1 == {"similar_trials": 9, "fatigue_linked_share": 0.556}          # 모드 1: 성공률 안 보냄
+    m5 = gr.GraphMode(mode=5, this_trials=3, this_comp={}, similar=gr.CompStat(5, 3),
+                      similar_any=gr.CompStat(3, 1), similar_clean=gr.CompStat(2, 2), fatigue_linked=3)
+    assert gr.rest_summary(m5) == {"similar_trials": 5, "fatigue_linked_share": 0.6, "with_compensation_rate": 0.333}
+    assert gr.rest_summary(gr.GraphMode(mode=5, this_trials=1, this_comp={}, similar=gr.CompStat(2, 1))) is None
+
+
+def test_rest_summary_fits_rest_whitelist():
+    from rally_brain.rest_advisor import GRAPH_FIELDS, build_graph
+    m5 = gr.GraphMode(mode=5, this_trials=3, this_comp={}, similar=gr.CompStat(6, 3),
+                      similar_any=gr.CompStat(3, 1), similar_clean=gr.CompStat(3, 2), fatigue_linked=3)
+    summ = gr.rest_summary(m5)
+    assert set(summ) == GRAPH_FIELDS and build_graph(summ, GRAPH_FIELDS) == summ
+
+
+class CacheRepo:
+    def __init__(self, fail=False):
+        self.fail, self.queries, self.seeded = fail, [], 0
+
+    def graph_ready(self):
+        return True
+
+    def upsert_graph(self, nodes, edges):
+        self.seeded += 1
+
+    def graph_trials(self, sid, k):
+        self.queries.append(sid)
+        if self.fail:
+            raise RuntimeError("db down")
+        return [dict(r, mode=5) for r in CURRENT], [dict(r, mode=5) for r in SIMILAR]
+
+
+def wait_idle(cache):
+    for _ in range(200):
+        if cache._worker is None:
+            return
+        time.sleep(0.01)
+    raise AssertionError("worker did not finish")
+
+
+def test_rest_cache_nonblocking_and_session_scoped():
+    repo = CacheRepo()
+    cache = gr.RestGraphCache(lambda: repo, delay_s=0.0)
+    assert cache.get(SID, 5) is None                     # 아직 없음 → 그래프 없이
+    cache.refresh(SID)
+    wait_idle(cache)
+    got = cache.get(SID, 5)
+    assert got["similar_trials"] == 9 and "with_compensation_rate" in got
+    assert cache.get("other", 5) is None and cache.get(SID, 7) is None
+    cache.refresh(SID)
+    wait_idle(cache)
+    assert repo.seeded == 1                              # 개념 그래프는 한 번만
+
+
+def test_rest_cache_coalesces_refresh_while_running():
+    gate = threading.Event()
+    repo = CacheRepo()
+    cache = gr.RestGraphCache(lambda: repo, delay_s=0.0, sleep=lambda _s: gate.wait(1.0))
+    cache.refresh(SID)
+    cache.refresh(SID)
+    cache.refresh(SID)                                   # 돌고 있는 동안 여러 번 → 한 번만 더
+    assert threading.active_count() >= 2
+    gate.set()
+    wait_idle(cache)
+    assert len(repo.queries) == 2
+
+
+def test_rest_cache_failure_keeps_going():
+    logs = []
+    repo = CacheRepo(fail=True)
+    cache = gr.RestGraphCache(lambda: repo, delay_s=0.0, log=logs.append)
+    cache.refresh(SID)
+    wait_idle(cache)
+    assert cache.get(SID, 5) is None and logs and "그래프 없이" in logs[0]
+    cache.close()
+    cache.refresh(SID)
+    assert cache._worker is None

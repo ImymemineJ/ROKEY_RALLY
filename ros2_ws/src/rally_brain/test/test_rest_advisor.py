@@ -273,3 +273,77 @@ def test_reject_llm_proposal_keeps_running(node):
         assert not node._respond_proposal(node.control.session_id, item['proposal_id'], 'accept')[0]
     finally:
         gate.set()
+
+
+# ---------- 지식 그래프 근거 (PR ②) ----------
+GRAPH = {'similar_trials': 6, 'with_compensation_rate': 0.333, 'without_compensation_rate': 0.667,
+         'fatigue_linked_share': 0.5}
+
+
+def test_graph_whitelist():
+    rows = [trial(i) for i in range(1, 4)]
+    assert 'graph' not in build_request(5, rows, [], FIELDS)
+    payload = build_request(5, rows, [], FIELDS, graph=GRAPH, graph_fields=['similar_trials', 'fatigue_linked_share'])
+    assert payload['graph'] == {'fatigue_linked_share': 0.5, 'similar_trials': 6}     # 허용한 것만
+    for bad in ({'session_id': 1}, {'similar_trials': float('nan')}, {'with_compensation_rate': 1.5},
+                {'similar_trials': 'six'}, {'similar_trials': -1}):
+        with pytest.raises(ValueError):
+            build_request(5, rows, [], FIELDS, graph=bad, graph_fields=sorted(rest_advisor.GRAPH_FIELDS))
+    with pytest.raises(ValueError):
+        build_request(5, rows, [], FIELDS, graph=GRAPH, graph_fields=['trial_ids'])
+    with pytest.raises(ValueError):
+        RestAdvisor(None, graph_fields=['trial_ids'])
+
+
+def test_start_sends_graph_and_drops_bad_graph():
+    calls = []
+    advisor = RestAdvisor(lambda p, req, s: calls.append(req) or {'action': 'continue'},
+                          graph_fields=sorted(rest_advisor.GRAPH_FIELDS))
+    assert advisor.start('t1', 5, [trial()], [], GRAPH)
+    advisor._worker.join(1.0)
+    assert calls[-1]['graph'] == GRAPH
+    advisor.invalidate()
+    assert advisor.start('t2', 5, [trial()], [], {'session_id': 'x'})   # 잘못된 그래프 → 빼고 판단은 그대로
+    advisor._worker.join(1.0)
+    assert 'graph' not in calls[-1]
+
+
+class FakeGraphCache:
+    def __init__(self):
+        self.refreshed, self.asked = [], []
+
+    def refresh(self, sid):
+        self.refreshed.append(sid)
+
+    def get(self, sid, mode):
+        self.asked.append((sid, mode))
+        return dict(GRAPH)
+
+    def close(self):
+        pass
+
+
+def test_bt_runner_attaches_cached_graph_without_waiting(node):
+    """시도가 끝나면 갈아 두기만 요청하고(막히지 않음), 휴식 판단에는 이미 있는 값을 붙인다."""
+    from rally_db.convert import session_uuid
+    cache = FakeGraphCache()
+    node._rest_graph = cache
+    node._rest_advisor.close()
+    gate, calls = None, []
+    session = node._session
+    session.current_mode = 5
+    session.trials = [trial(1, 5, True), trial(2, 5, False), trial(3, 5, True, 10.0)]
+    for item in session.trials:
+        item.notes = ""
+    node._context.body.compensation_detected = True
+    node._rest_advisor = RestAdvisor(lambda _p, req, _s: calls.append(req) or {'action': 'continue'},
+                                     graph_fields=sorted(rest_advisor.GRAPH_FIELDS))
+    node._after_trial(session, session.trials[-1])
+    assert cache.refreshed == [session_uuid(session.session_id)]
+    assert node._rest_advisor._done.wait(1)
+    assert calls and calls[0]['graph'] == GRAPH
+    assert cache.asked == [(session_uuid(session.session_id), 5)]
+
+
+def test_rest_graph_off_without_ready_llm(node):
+    assert node._rest_graph is None        # 테스트 환경: API 키 없음 → 캐시를 만들지 않고 DB 에도 붙지 않는다
