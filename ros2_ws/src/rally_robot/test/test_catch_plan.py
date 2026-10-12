@@ -57,3 +57,14 @@ def test_parse_info():
     d = parse_info([100.5, 0.4, 0.02, 0.03, 7.0, 0.2])
     assert d["t_cross"] == 100.5 and d["n_obs"] == 7.0 and d["since_release"] == 0.2
     assert parse_info([1.0, 2.0]) is None
+
+
+def test_down_limited_separately():
+    """아래(+w, 투구자 쪽)는 down_max_m 로 따로 자름 — 대기 자세 −9.4 cm 자기충돌 (10/11)."""
+    _, u, w = plane_axes(N45)
+    down = intercept(READY, PAD, N45, PAD + 0.20 * w, 0.15, 0.15, down_max_m=0.08)
+    assert abs(down.dw - 0.08) < 1e-9 and down.clipped
+    up = intercept(READY, PAD, N45, PAD - 0.20 * w, 0.15, 0.15, down_max_m=0.08)
+    assert abs(up.dw + 0.15) < 1e-9
+    same = intercept(READY, PAD, N45, PAD + 0.20 * w, 0.15, 0.15)
+    assert abs(same.dw - 0.15) < 1e-9

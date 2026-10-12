@@ -102,7 +102,7 @@ QoS 규칙: 영상·관절·힘 같은 **스트림은 BestEffort + depth 1**(최
 | `/rally/skill/push_ball` | `rally_interfaces/PushBall` | 1 | 거치대 공 비전 집기 → 레인 입구 → 퍼터식 치기 → **손 보기 자세에서 끝남**(`mode1.end_at_hand_view`, 환자가 받는 모습). 훈련 Brain은 `target` + 계산한 양수 `push_speed` 전달. 속도 0의 로봇 계산 경로는 단독 시험용. 결과 `stop_position`·`error_mm` 은 `mode1.stop_measure: true`(단독 시험)일 때만 채움 — 세션에선 brain 이 받기 관측과 동시에 손 보기 자세 카메라(`SceneContext.objects`)로 재서 `TrialResult.error_mm`·`stop_d_m` 에 기록 |
 | `/rally/skill/return_ball` | `rally_interfaces/ReturnBall` | 1 | 시도 뒤 레인 안 공을 비전으로 찾아 집고 거치대 맨 윗부분(`mode1.rack_drop_posx`, 직접교시)에 넣기 → 손 보기 자세. 로봇이 닿는 곳(중앙선 앞)에 올 때까지 기다림 (feedback `out_of_reach` → brain 이 안내) |
 | `/rally/skill/pick_compliant` | `rally_interfaces/PickCompliant` | 1·3·5 공통 | task_compliance_ctrl(Z 저강성), 접촉 감지 후 파지 |
-| `/rally/skill/catch_ball` | `rally_interfaces/CatchBall` | 3 (챌린지) | 대기 자세 → 공 놓은 뒤 0.16 s 예측점으로 amovel 한 번(TCP 자세 고정, 왼쪽 안 감, 오른쪽·위아래 15 cm) → 힘으로 명중 판정 → 판정 뒤 로직(`catch_ball_after.py`) → 복귀. 비행 중 `contact_expected`. servol 보정은 나중 |
+| `/rally/skill/catch_ball` | `rally_interfaces/CatchBall` | 3 (챌린지) | 대기 자세 → 공 놓은 뒤 0.16 s 예측점으로 amovel 한 번(TCP 자세 고정, 왼쪽 안 감, 오른쪽·위 15 cm, 아래 8 cm — 대기 자세 −9.4 cm 자기충돌) → 힘으로 명중 판정 → 판정 뒤 로직(`catch_ball_after.py`) → 복귀. 비행 중 `contact_expected`. servol 보정은 나중 |
 | `/rally/skill/move_target` | `rally_interfaces/MoveTarget` | 3 (Phase 2) | movec / movesx / moveb 궤적, 환자가 맞혀야 하는 후기 단계 |
 | `/rally/skill/detach_ball` | `rally_interfaces/DetachBall` | 3 | 힘 제어 당김, 힘 급락으로 떼어짐 판정 |
 | `/rally/skill/handover` | `rally_interfaces/Handover` | 5 | 기울여 제시, 당김 힘 감지 해제, servol 손 추종 |

@@ -54,18 +54,20 @@ class Intercept:
     clipped: bool
 
 
-def intercept(ready_tcp_posx, pad_center_m, normal, predicted_m, right_max_m, updown_max_m) -> Intercept:
+def intercept(ready_tcp_posx, pad_center_m, normal, predicted_m, right_max_m, updown_max_m,
+              down_max_m: float | None = None) -> Intercept:
     """예측점으로 패드 중심을 옮기는 TCP 목표. TCP 자세 고정·위치만 이동 (10/11 결정).
 
     - 패드 면 안 두 축으로 분해해 면 수직 성분은 버린다(예측점은 이미 면 위).
     - 왼쪽(u < 0)으로는 가지 않는다: 왼쪽 공은 '환자 투구 실패'로 성공률에서 뺀다 (10/11 결정).
-    - 오른쪽 right_max_m, 위아래 ±updown_max_m 로 자른다 (어깨 특이점·작업 공간 여유).
+    - 오른쪽 right_max_m, 위 updown_max_m, 아래(+w, 투구자 쪽) down_max_m(없으면 updown_max_m) 로 자른다 (어깨 특이점·작업 공간 여유).
+      아래는 대기 자세에서 약 9.4 cm 에 두산 자기충돌 정지 (10/11 실측) → skills.yaml mode3.down_max_m 0.08.
     """
     _, u, w = plane_axes(normal)
     d = np.asarray(predicted_m, float) - np.asarray(pad_center_m, float)
     du0, dw0 = float(d @ u), float(d @ w)
     du = min(max(du0, 0.0), right_max_m)
-    dw = min(max(dw0, -updown_max_m), updown_max_m)
+    dw = min(max(dw0, -updown_max_m), updown_max_m if down_max_m is None else down_max_m)
     move_mm = (du * u + dw * w) * 1000.0
     tcp = [float(ready_tcp_posx[i]) + float(move_mm[i]) for i in range(3)] + [float(v) for v in ready_tcp_posx[3:6]]
     return Intercept(tcp_posx=tcp, du=du, dw=dw, offset_m=float(np.hypot(du0, dw0)),

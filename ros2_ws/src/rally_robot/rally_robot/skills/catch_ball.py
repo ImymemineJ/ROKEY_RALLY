@@ -9,7 +9,7 @@
 1. ready     : 패드를 쥐고(없으면 닫아서 확인) 대기 자세 posj 로 관절 이동. 힘 영점
 2. tracking  : 이 goal 이후 첫 예측이 오면 투구 시작 → contact_expected ON (공이 맞아도 nudge STOP 안 나게, 힘 한계 25 N 은 그대로 —
                10/11 정지 시험에서 맞을 때마다 nudge STOP). 공 놓은 뒤 decide_after_s(0.16 s, 오차 중앙 약 3 cm) 까지 최신 예측을 기다림
-3. intercept : 예측점으로 패드 중심을 옮기는 TCP 위치로 amovel 한 번 (자세 고정, 왼쪽 안 감, 오른쪽·위아래 15 cm 까지 — catch_plan.intercept).
+3. intercept : 예측점으로 패드 중심을 옮기는 TCP 위치로 amovel 한 번 (자세 고정, 왼쪽 안 감, 오른쪽·위 15 cm·아래 8 cm 까지 — catch_plan.intercept).
                대기 패드 중심에서 catch_radius 밖이면 움직이지 않음 (out_of_radius)
 4. judge     : 도착 뒤 ~ 예측 교차 시각 + hold_after_impact_s 동안 툴 힘 증가로 명중 판정. 붙음/튕김 구분은 비전 판정이 생기면 바꾼다
 5. after     : after_catch() — 정정인 담당 로직 (이 파일의 after_catch 함수, 지금은 아무것도 안 함)
@@ -45,6 +45,7 @@ DEFAULTS = dict(
     decide_after_s=0.16,
     right_max_m=0.15,
     updown_max_m=0.15,
+    down_max_m=0.08,                                    # 아래(투구자 쪽): 대기 자세 −9.4 cm 에 자기충돌 (10/11 실측)
     catch_vel_mm_s=450.0,                               # 위아래 730 mm/s 는 관절 속도 121 % 로 불가 (10/11 계산)
     catch_acc_mm_s2=1000.0,                             # 10/10 실측: 20 cm 출발 148 ms · 도착 0.85 s
     return_vel_mm_s=150.0,
@@ -191,7 +192,8 @@ def execute(node):
             node.set_contact(True)                             # 공이 날아오는 동안만 nudge 끔 (힘 한계 25 N 은 그대로)
             phase("tracking", pred)
             pred = wait_decide(pred, t_goal)
-            plan = intercept(ready, pad0, cfg["pad_normal"], pred.point, cfg["right_max_m"], cfg["updown_max_m"])
+            plan = intercept(ready, pad0, cfg["pad_normal"], pred.point, cfg["right_max_m"], cfg["updown_max_m"],
+                             cfg["down_max_m"])
             res.landing_predicted = _point(pred.point)
 
             if goal.catch_radius > 0 and plan.offset_m > goal.catch_radius:
