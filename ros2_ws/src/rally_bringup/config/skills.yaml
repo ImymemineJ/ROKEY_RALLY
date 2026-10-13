@@ -239,7 +239,8 @@ mode7:
   target_force_range_n: [3.0, 12.0]
   hold_time_s: 2.0
   yield_distance_m: 0.05
-  force_limit_n: 15.0               # safety.yaml 25 N 보다 낮음
+  force_limit_n: 24.0               # 10/13 15 → 24 (정정인 동의). 서버 PC 실로봇: 손목을 밀면 미는 힘 10~14 N, 합력(x·y·z, 한계 판정 기준)은
+                                    #   순간 15~17.5 N → 15 N 이면 목표 8~10 N 에서 force_limit 가 잦음. safety.yaml 25 N 보다 낮음 — 25 N 넘으면 안전 STOP(래치)
   # brain (trees/mode7_resist.py) — 목표 힘 = target_force_start_n × (1 + level_step_ratio)^난이도, target_force_range_n 으로 자름
   stiffness_default: 700.0          # 고정 (강성 3단계 200/700/1500 중 가운데). 리허설 느낌 보고 조정
   level_step_ratio: 0.10            # 난이도 한 단계 = 목표 힘 ±10 %
