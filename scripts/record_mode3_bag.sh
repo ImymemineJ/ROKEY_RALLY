@@ -73,9 +73,11 @@ if [ "$IMAGES" = 1 ]; then
 fi
 echo "[bag] $OUT/$NAME (영상 $([ "$IMAGES" = 1 ] && echo 포함 || echo 제외), 남은 공간 ${FREE_GB} GB) — 먼저 끄려면 Ctrl+C"
 
-ARGS=(-s mcap -o "$OUT/$NAME" --include-hidden-topics)   # _action/status·feedback 은 숨은 토픽
+# --disable-keyboard-controls (10/15): timeout 은 명령을 터미널의 뒷단(백그라운드 그룹)으로 돌리는데, ros2 bag record 의 키보드 제어(스페이스=일시정지)가
+#   터미널을 읽으려 하면 커널이 멈춤 신호(SIGTTIN)를 보내 녹화가 시작도 못 하고 멈춘 채(T) 남음 — 파일도 안 생기고 Ctrl+C 도 안 먹음
+ARGS=(-s mcap -o "$OUT/$NAME" --include-hidden-topics --disable-keyboard-controls)   # _action/status·feedback 은 숨은 토픽
 if [ "$DURATION" != 0 ]; then   # Jazzy 엔 전체 길이 제한 옵션이 없음 (-d 는 파일 쪼개기) — SIGINT 로 정상 종료시켜 mcap 을 닫는다
-  rc=0; timeout -s INT "$DURATION" ros2 bag record "${ARGS[@]}" --topics "${TOPICS[@]}" || rc=$?
+  rc=0; timeout --foreground -s INT "$DURATION" ros2 bag record "${ARGS[@]}" --topics "${TOPICS[@]}" || rc=$?
   [ "$rc" = 124 ] && rc=0   # 시간이 다 돼 끝난 것 = 정상
   echo "[bag] 저장: $OUT/$NAME"; exit "$rc"
 fi
