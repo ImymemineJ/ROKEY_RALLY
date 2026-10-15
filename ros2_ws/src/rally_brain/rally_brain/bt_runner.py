@@ -55,6 +55,7 @@ from rally_brain.speech import phrase_problem
 from rally_brain.session_control import SessionControl
 from rally_brain.proposal_control import ProposalControl, REST_PROMPT
 from rally_brain.rest_advisor import configured_advisor
+from rally_db.convert import session_uuid
 from rally_brain.trees.session_tree import MODE_NAMES, Session, build_session_tree, modes_after_switch
 from rally_bringup.readiness import ReadinessChecker
 from rally_interfaces.action import RunSession
@@ -120,6 +121,7 @@ class BtRunner(Node):
         if self._exposure is not None:
             self._exposure.want(False)                               # 켜질 때 자동 노출 한 번 (모드 3 도중 재시작 대비, #139 리뷰)
         self.get_logger().info(f"휴식 LLM: {self._rest_advisor.status}")
+        self._rest_graph = self._make_rest_graph()
         self._switch_lock = self.control.lock                         # 세션·전환·휴식의 공통 lock
         self._safety_abort = False                                    # STOP 한 번 수신하면 세션 종료까지 유지
         self._hand_cfg = hand_stop.config(self._skills_cfg)
@@ -285,6 +287,8 @@ class BtRunner(Node):
         return py_trees.trees.BehaviourTree(build_session_tree(session, modes, n))
 
     def _after_trial(self, session: Session, trial: TrialResult) -> None:
+        if self._rest_graph is not None:
+            self._rest_graph.refresh(session_uuid(session.session_id))   # 백그라운드. 다음 휴식 판단부터 쓰인다
         with self._switch_lock:
             if not self._safety_abort and (text := self._posture.end_trial(self._speaking)):
                 self.get_logger().info(f"[자세] 보상 동작 연속 — 안내: {text}")
@@ -322,7 +326,9 @@ class BtRunner(Node):
         elif d.action == "ask_llm":
             started = False
             if not self._proposal_blocked() and not self._pending_proposal():
-                started = self._rest_advisor.start(self._rest_token(), trial.mode, history, d.signals)
+                graph = (self._rest_graph.get(session_uuid(session.session_id), trial.mode)
+                         if self._rest_graph is not None else None)   # 이미 갈아 둔 값만 — DB 를 기다리지 않는다
+                started = self._rest_advisor.start(self._rest_token(), trial.mode, history, d.signals, graph)
             log.info(f"[규칙] {d.reason} — 휴식 판단 요청" if started else "[규칙] 휴식 판단 생략 — 계속 훈련")
         elif d.action == "suggest_rest":
             self._pause(d.reason)
@@ -396,6 +402,17 @@ class BtRunner(Node):
             self._proposal_cancelled = True
             self._invalidate_rest()
         return CancelResponse.ACCEPT
+
+    def _make_rest_graph(self) -> graph_rag.RestGraphCache | None:
+        """휴식 판단에 그래프 근거를 붙일 때만 (llm.yaml rest_send_graph 가 있고 LLM 이 준비됨). DB 는 첫 조회 때 연결."""
+        advisor = self._rest_advisor
+        if not advisor.graph_fields or advisor.status != "ready":
+            return None
+
+        def repo():
+            from rally_db.repository import Repository
+            return Repository()
+        return graph_rag.RestGraphCache(repo, k=advisor.graph_k, log=self.get_logger().warn)
 
     def _invalidate_rest(self, proposal=True):
         self._rest_generation += 1
@@ -741,6 +758,8 @@ class BtRunner(Node):
 
     def destroy_node(self):
         self._rest_advisor.close()
+        if self._rest_graph is not None:
+            self._rest_graph.close()
         if self._dashboard_bridge is not None:
             self._dashboard_bridge.close()
         return super().destroy_node()

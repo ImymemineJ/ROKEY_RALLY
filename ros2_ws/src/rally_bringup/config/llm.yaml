@@ -28,3 +28,7 @@ rally_bt_runner:
     rest_history_n: 5
     rest_send_fields: [mode, trial_index, success, error_mm, duration_s]
     rest_send_signals: [compensation, success_drop, slowing]
+    # 지식 그래프 근거 (graph_rag.RestGraphCache, PR ②). 비슷한 과거 시도의 집계 비율만 — ID·날짜·보상 동작 이름 없음.
+    # 비우면 ([]) 그래프 없이 기존 입력만. DB 조회는 시도가 끝날 때 백그라운드에서만 하고 판단 시점에는 기다리지 않는다
+    rest_send_graph: [similar_trials, with_compensation_rate, without_compensation_rate, fatigue_linked_share]
+    rest_graph_k: 5              # 이번 세션 시도마다 비슷한 과거 시도 몇 개 (겹치면 한 번. 적으면 비교 비율이 표본 3 미만으로 빠짐)

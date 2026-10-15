@@ -324,6 +324,7 @@ STOP·취소는 기존 세션 중단 처리. 타격 action 실패 시에도 다�
 - `suggest_rest`는 `source: llm`의 20초 제안만 생성한다. LLM이 휴식을 즉시 적용하거나 로봇 제어값·STOP/reset을 변경하지 않는다. 화면은 **AI 제안**으로 표시하고 고정 안내 문구를 사용한다. 실제 휴식 적용에는 기존 대시보드 수락이 필요하다.
 - 외부 전송은 `llm.yaml`의 휴식 판단 전용 허용 필드만 사용한다. 같은 모드의 유효 이력 최대 5개와 유한한 수치·불리언만 사용하며 세션 식별자·자유 메모·영상·원시 좌표·임의 params/metrics 키를 보내지 않는다.
 - 모드 1의 받기 후보는 실제 공 받기의 성공률로 사용하지 않고 자동 난이도 변경도 계속 차단한다. 휴식 판단은 불확실한 신호에 대한 제안이며 피로 진단이나 치료 효과 판정이 아니다.
-- 음성 `tired`의 직접 휴식은 기존대로다. 음성 수락/거절, KG/Graph RAG 검색 연결은 별도 후속 범위다.
+- 음성 `tired`의 직접 휴식은 기존대로다. 음성 수락/거절은 별도 후속 범위다.
+- **지식 그래프 근거 (10/11, `graph_rag.RestGraphCache`)**: 시도가 끝날 때마다 백그라운드 스레드 하나가 DB 그래프(`kg_node`·`kg_edge`, schema_004)에서 비슷한 과거 시도(같은 모드·다른 세션, pgvector) → 보상 동작 → 피로 신호를 따라가 모드별 집계를 갈아 둔다. 휴식 판단은 이미 있는 값만 읽어 요청의 `graph`에 붙인다(DB를 기다리지 않음, 한 시도 늦은 값일 수 있음). 보내는 키는 `rest_send_graph` 허용 목록 ∩ 코드 상수 `GRAPH_FIELDS`(`similar_trials`, `with_compensation_rate`, `without_compensation_rate`, `fatigue_linked_share`)의 유한한 숫자뿐이다. 비슷한 시도 3개 미만이면 `graph` 없음, 비교 쪽이 3개 미만인 비율은 뺀다. 모드 1은 성공률 비율을 보내지 않는다. 그래프 값이 잘못되면 `graph`만 빼고 기존 입력으로 판단한다. DB 오류·테이블 없음·LLM 키 없음이면 그래프 없이 기존과 같다.
 
-설정은 BtRunner가 시작할 때 설치된 `llm.yaml`의 `rally_bt_runner.ros__parameters`를 직접 읽는다. `rest_enabled`, `rest_model`, `rest_temperature`, `rest_timeout_s`, `rest_prompt`, `rest_history_n`, `rest_send_fields`, `rest_send_signals`가 휴식 전용 설정이다. 변경 후 Brain 재시작이 필요하며 ROS 동적 파라미터로 제공하지 않는다. 외부 주소 환경변수로 목적지를 바꾸지 않는다.
+설정은 BtRunner가 시작할 때 설치된 `llm.yaml`의 `rally_bt_runner.ros__parameters`를 직접 읽는다. `rest_enabled`, `rest_model`, `rest_temperature`, `rest_timeout_s`, `rest_prompt`, `rest_history_n`, `rest_send_fields`, `rest_send_signals`, `rest_send_graph`, `rest_graph_k`가 휴식 전용 설정이다. 변경 후 Brain 재시작이 필요하며 ROS 동적 파라미터로 제공하지 않는다. 외부 주소 환경변수로 목적지를 바꾸지 않는다.
