@@ -6,7 +6,7 @@ compose 서비스마다 part 를 하나씩 준다:
                 측면 /side/side/color/image_raw (컬러만) — 노출 항상 고정 (set_camera_params 가 뜬 뒤 넣음). side_camera:=false 면 안 띄움
               + camera_tf · segmenter · tracker · flight_predictor
               + web_video_server (포트 8080) — 대시보드 '카메라' 칸이 MJPEG 로 받아 본다 (video_server:=false 면 안 띄움)
-  human     → usb_cam(/webcam/image_raw) + hand_pose · body_pose
+  human     → hand_pose · body_pose (몸 자세는 측면 RealSense, body_image:=/webcam/image_raw 면 usb_cam 웹캠도 띄움)
   voice     → intent_node · tts_node (10/14 부터 서버 PC compose pc3 에서 띄움 — 파일 이름은 역할 이름 그대로)
   all       → 셋 다 (컨테이너 없이 한 터미널에서 확인할 때)
 
@@ -39,7 +39,10 @@ def _params(context, executable: str) -> list[dict]:
                  "depth_topic": "/camera/aligned_depth_to_color/image_raw",
                  "info_topic": "/camera/color/camera_info"}]
     if executable == "body_pose":
-        return [{"arm": LaunchConfiguration("body_arm").perform(context)}]   # 시연은 왼팔 (10/8 결정, 웹캠이 환자 왼쪽)
+        # 10/15 정정인: 몸 자세는 웹캠 대신 측면 RealSense 로 (환자 쪽이 더 잘 보이고 대시보드 '몸 자세' 칸과 같은 화면).
+        #   body_image 를 /webcam/image_raw 로 주면 예전처럼 웹캠
+        return [{"arm": LaunchConfiguration("body_arm").perform(context),
+                 "image_topic": LaunchConfiguration("body_image").perform(context)}]   # 시연은 왼팔 (10/8 결정)
     if executable == "flight_predictor":
         # 10/15 정정인 실로봇: 투구 시작 속도 1.5 m/s(노드 기본)면 놓기 전 손 휘두름(z −0.3, 1.9~2.9 m/s)을 놓음으로 잡아 궤적이 틀어지고
         #   진짜 비행 점이 전부 버려짐 → 예측 발행 0. 3.0 이면 5번 중 4번 발행 (scripts/vision_local.sh 는 2.5 로 넘기고 있었음)
@@ -146,8 +149,8 @@ def _launch_part(context):
     for p in parts:
         if p == "vision":
             actions += _realsense(context) + _video_server(context)
-        if p == "human":
-            actions += _webcam(context)
+        if p == "human" and LaunchConfiguration("body_image").perform(context) == "/webcam/image_raw":
+            actions += _webcam(context)                   # 웹캠은 body_pose 가 웹캠을 볼 때만 띄움
         for package in {pkg for pkg, _ in PARTS[p]}:
             actions += _nodes(context, package, [exe for pkg, exe in PARTS[p] if pkg == package])
     return actions
@@ -159,6 +162,8 @@ def generate_launch_description():
         DeclareLaunchArgument("side_camera", default_value="true", description="측면 RealSense (모드 3) 띄우기"),
         DeclareLaunchArgument("video_server", default_value="true", description="대시보드 카메라 화면용 web_video_server (포트 8080)"),
         DeclareLaunchArgument("webcam_device", default_value="/dev/video0", description="측면 웹캠 장치"),
+        DeclareLaunchArgument("body_image", default_value="/side/side/color/image_raw",
+                              description="body_pose 입력 영상: /side/side/color/image_raw(측면 RealSense, 기본) | /webcam/image_raw(웹캠)"),
         DeclareLaunchArgument("body_arm", default_value="left", description="body_pose 뻗는 팔: left | right | auto (시연은 왼팔)"),
         DeclareLaunchArgument("segmenter_hand_eye", default_value="",
                               description="segmenter hand_eye_path: 비우면 hand_eye.yaml, none = 옛 T_gripper2camera.npy (#66 좌표, vision_offset_m 기준)"),
